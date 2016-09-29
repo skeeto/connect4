@@ -5,18 +5,41 @@
 #include <stdlib.h>
 #include <inttypes.h>
 
+/* Engine, AI, and Display Parameters */
+
+// Board dimensions (must be <= 64 slots)
 #define CONNECT4_WIDTH  7
 #define CONNECT4_HEIGHT 6
 
-#define CONNECT4_C            2.0f
+// AI constraints
 #define CONNECT4_MEMORY_SIZE  (32UL * 1024 * 1024)
 #define CONNECT4_MAX_PLAYOUTS (512UL * 1024)
 
+// AI parameters
+#define CONNECT4_C          2.0f
 #define CONNECT4_SCORE_WIN  1.0f
 #define CONNECT4_SCORE_DRAW 0.1f
 
-#if defined(__unix__) || defined(__unix) || \
-    (defined(__APPLE__) && defined(__MACH__))
+// Display colors and size
+#define COLOR_PLAYER0   1
+#define COLOR_PLAYER1   4
+#define COLOR_HIGHLIGHT 3
+#define DISPLAY_INDENT  ((80 - CONNECT4_WIDTH * 6) / 2)
+
+/* OS Terminal/Console API */
+
+enum os_special {
+    RIGHT_HALF_BLOCK = 0x2590,
+    LEFT_HALF_BLOCK  = 0x258c,
+    FULL_BLOCK       = 0x2588,
+};
+
+static void os_color(int);
+static void os_reset_terminal(void);
+static void os_special(enum os_special);
+static void os_finish(void);
+
+#if defined(__unix__) || defined(__unix) || defined(__APPLE__)
 #include <unistd.h>
 #include <sys/time.h>
 
@@ -34,12 +57,6 @@ os_reset_terminal(void)
 {
     puts("\x1b[2J\x1b[H");
 }
-
-enum os_special {
-    RIGHT_HALF_BLOCK,
-    LEFT_HALF_BLOCK,
-    FULL_BLOCK,
-};
 
 static void
 os_special(enum os_special s)
@@ -94,27 +111,10 @@ os_reset_terminal(void)
     SetConsoleCursorPosition(out, info.dwCursorPosition);
 }
 
-enum os_special {
-    RIGHT_HALF_BLOCK,
-    LEFT_HALF_BLOCK,
-    FULL_BLOCK,
-};
-
 static void
 os_special(enum os_special s)
 {
-    WCHAR block;
-    switch (s) {
-        case RIGHT_HALF_BLOCK:
-            block = 0x2590;
-            break;
-        case LEFT_HALF_BLOCK:
-            block = 0x258c;
-            break;
-        case FULL_BLOCK:
-            block = 0x2588;
-            break;
-    }
+    WCHAR block = s;
     HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD dummy;
     WriteConsoleW(h, &block, 1, &dummy, 0);
@@ -126,6 +126,8 @@ os_finish(void)
     system("pause");
 }
 #endif
+
+/* Pseudo-Random Number Generator */
 
 static uint64_t
 rotl(const uint64_t x, int k)
@@ -154,8 +156,14 @@ splitmix64(uint64_t *x)
     return z ^ (z >> 31);
 }
 
+/* Connect Four Engine */
+
 static uint64_t connect4_wins[CONNECT4_WIDTH * CONNECT4_HEIGHT][16];
 
+/**
+ * Fills out the bitboard tables. Must be called before any other
+ * connect4 function.
+ */
 static void
 connect4_startup(void)
 {
@@ -245,7 +253,6 @@ struct connect4 {
         uint32_t next[CONNECT4_WIDTH];
         uint32_t playouts[CONNECT4_WIDTH];
         float    score[CONNECT4_WIDTH];
-        uint32_t playouts_total;
     } nodes[];
 };
 
@@ -257,7 +264,6 @@ connect4_alloc(struct connect4 *c)
         struct connect4_node *n = c->nodes + node;
         c->nodes_allocated++;
         c->free = n->next[0];
-        n->playouts_total = 0;
         for (int i = 0; i < CONNECT4_WIDTH; i++) {
             n->next[i] = CONNECT4_NULL;
             n->playouts[i] = 0;
@@ -280,7 +286,7 @@ connect4_free(struct connect4 *c, uint32_t node)
     }
 }
 
-static void
+static struct connect4 *
 connect4_init(void *buf, size_t bufsize)
 {
     struct connect4 *c = buf;
@@ -297,6 +303,7 @@ connect4_init(void *buf, size_t bufsize)
         c->nodes[i].next[0] = i + 1;
     c->nodes[c->nodes_available - 1].next[0] = CONNECT4_NULL;
     c->root = connect4_alloc(c);
+    return c;
 }
 
 static void
@@ -338,7 +345,7 @@ connect4_playout(struct connect4 *c,
             options[noptions++] = i;
     int play;
     if (noptions == 0) {
-        /* UCB1 */
+        /* Select a move using upper confidence bound (UCB1). */
         uint32_t total = 0;
         for (int i = 0; i < CONNECT4_WIDTH; i++)
             if (connect4_valid(taken, i))
@@ -376,7 +383,7 @@ connect4_playout(struct connect4 *c,
             n->score[play] += CONNECT4_SCORE_WIN;
         return winner;
     } else {
-        /* Random unplayed. */
+        /* Select a random, unplayed move. */
         if (noptions == 1)
             play = options[0];
         else
@@ -400,10 +407,11 @@ connect4_playout(struct connect4 *c,
             case CONNECT4_RESULT_UNRESOLVED:
                 n->next[play] = connect4_alloc(c);
                 if (n->next[play] == CONNECT4_NULL)
-                    return -1;
+                    return -1; // out of memory
                 n->playouts[play]++;
                 break;
         }
+        /* Play out rest of game without node allocation. */
         int original_play = play;
         int original_turn = turn;
         for (;;) {
@@ -447,43 +455,41 @@ connect4_playout_many(struct connect4 *c, uint32_t count)
             break;
     struct connect4_node *n = c->nodes + c->root;
     double best_ratio = -INFINITY;
-    int best = -1;
+    int best_move = -1;
     for (int i = 0; i < CONNECT4_WIDTH; i++)
         if (n->playouts[i]) {
             double ratio = n->score[i] / (double)n->playouts[i];
             if (ratio > best_ratio) {
                 best_ratio = ratio;
-                best = i;
+                best_move = i;
             }
         }
-    return best;
+    return best_move;
 }
 
-static int player_color[2] = {1, 4};
-static int highlight_color = 3;
-static int indent = (80 - CONNECT4_WIDTH * 6) / 2;
+/* Terminal/Console User Interface */
 
 static void
 connect4_display(uint64_t p0, uint64_t p1, uint64_t highlight)
 {
     os_reset_terminal();
-    printf("%*s", indent, "");
+    printf("%*s", DISPLAY_INDENT, "");
     for (int w = 0; w < CONNECT4_WIDTH; w++)
         printf(" %-5d", w + 1);
     puts("\n");
     for (int h = 0; h < CONNECT4_HEIGHT; h++) {
         for (int b = 0; b < 2; b++) {
-            printf("%*s", indent, "");
+            printf("%*s", DISPLAY_INDENT, "");
             for (int w = 0; w < CONNECT4_WIDTH; w++) {
                 int s = h * CONNECT4_WIDTH + w;
                 int mark = (highlight >> s) & 1;
                 int color = 0;
                 if ((p0 >> s) & 1)
-                    color = player_color[0];
+                    color = COLOR_PLAYER0;
                 else if ((p1 >> s) & 1)
-                    color = player_color[1];
+                    color = COLOR_PLAYER1;
                 if (color) {
-                    os_color(mark ? highlight_color : color);
+                    os_color(mark ? COLOR_HIGHLIGHT : color);
                     os_special(RIGHT_HALF_BLOCK);
                     if (mark)
                         os_color(0);
@@ -492,7 +498,7 @@ connect4_display(uint64_t p0, uint64_t p1, uint64_t highlight)
                     os_special(FULL_BLOCK);
                     if (mark) {
                         os_color(0);
-                        os_color(highlight_color);
+                        os_color(COLOR_HIGHLIGHT);
                     }
                     os_special(LEFT_HALF_BLOCK);
                     os_color(0);
@@ -507,7 +513,7 @@ connect4_display(uint64_t p0, uint64_t p1, uint64_t highlight)
     }
 }
 
-static char buf[CONNECT4_MEMORY_SIZE];
+static char buf[CONNECT4_MEMORY_SIZE];  // AI search tree storage
 
 int
 main(void)
@@ -521,6 +527,7 @@ main(void)
         PLAYER_HUMAN, PLAYER_AI
     };
 
+    /* Main Menu */
     int done = 0;
     do {
         os_reset_terminal();
@@ -558,8 +565,7 @@ main(void)
 
     /* Initialization */
     connect4_startup();
-    connect4_init(buf, sizeof(buf));
-    struct connect4 *connect4 = (void *)buf;
+    struct connect4 *connect4 = connect4_init(buf, sizeof(buf));
 
     /* Game Loop */
     uint64_t last = 0;
@@ -603,7 +609,7 @@ main(void)
             case CONNECT4_RESULT_WIN:
                 connect4_display(connect4->state[0], connect4->state[1], how);
                 fputs("Player ", stdout);
-                os_color(player_color[turn]);
+                os_color(turn ? COLOR_PLAYER1 : COLOR_PLAYER0);
                 os_special(FULL_BLOCK);
                 os_color(0);
                 puts(" wins!");
