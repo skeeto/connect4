@@ -30,6 +30,28 @@ os_reset_terminal(void)
     puts("\x1b[2J\x1b[H");
 }
 
+enum os_special {
+    RIGHT_HALF_BLOCK,
+    LEFT_HALF_BLOCK,
+    FULL_BLOCK,
+};
+
+static void
+os_special(enum os_special s)
+{
+    switch (s) {
+        case RIGHT_HALF_BLOCK:
+            fputs("▐", stdout);
+            break;
+        case LEFT_HALF_BLOCK:
+            fputs("▌", stdout);
+            break;
+        case FULL_BLOCK:
+            fputs("█", stdout);
+            break;
+    }
+}
+
 static void
 os_finish(void)
 {
@@ -37,6 +59,7 @@ os_finish(void)
 }
 
 #elif _WIN32
+#include <wchar.h>
 #include <windows.h>
 
 static void
@@ -60,7 +83,36 @@ os_reset_terminal(void)
     GetConsoleScreenBufferInfo(out, &info);
     info.dwCursorPosition.Y = 0;
     info.dwCursorPosition.X = 0;
+    COORD origin = {0, 0};
+    DWORD dummy;
+    FillConsoleOutputCharacter(out, ' ', -1, origin, &dummy);
     SetConsoleCursorPosition(out, info.dwCursorPosition);
+}
+
+enum os_special {
+    RIGHT_HALF_BLOCK,
+    LEFT_HALF_BLOCK,
+    FULL_BLOCK,
+};
+
+static void
+os_special(enum os_special s)
+{
+    WCHAR block;
+    switch (s) {
+        case RIGHT_HALF_BLOCK:
+            block = 0x2590;
+            break;
+        case LEFT_HALF_BLOCK:
+            block = 0x258c;
+            break;
+        case FULL_BLOCK:
+            block = 0x2588;
+            break;
+    }
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD dummy;
+    WriteConsoleW(h, &block, 1, &dummy, 0);
 }
 
 static void
@@ -427,16 +479,17 @@ connect4_display(uint64_t p0, uint64_t p1, uint64_t highlight)
                     color = player_color[1];
                 if (color) {
                     os_color(mark ? highlight_color : color);
-                    fputs("▐", stdout);
+                    os_special(RIGHT_HALF_BLOCK);
                     if (mark)
                         os_color(0);
                     os_color(color);
-                    fputs("██", stdout);
+                    os_special(FULL_BLOCK);
+                    os_special(FULL_BLOCK);
                     if (mark) {
                         os_color(0);
                         os_color(highlight_color);
                     }
-                    fputs("▌", stdout);
+                    os_special(LEFT_HALF_BLOCK);
                     os_color(0);
                     fputs("  ", stdout);
                 } else {
@@ -546,7 +599,7 @@ main(void)
                 connect4_display(connect4->state[0], connect4->state[1], how);
                 fputs("Player ", stdout);
                 os_color(player_color[turn]);
-                fputs("█", stdout);
+                os_special(FULL_BLOCK);
                 os_color(0);
                 puts(" wins!");
                 goto done;
