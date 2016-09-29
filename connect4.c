@@ -7,10 +7,68 @@
 
 #define CONNECT4_WIDTH  7
 #define CONNECT4_HEIGHT 6
-_Static_assert(CONNECT4_WIDTH * CONNECT4_HEIGHT <= 64, "invalid board size");
 
 #define CONNECT4_SCORE_WIN  1.0f
 #define CONNECT4_SCORE_DRAW 0.1f
+
+#ifdef __unix__
+#include <unistd.h>
+#include <sys/time.h>
+
+static void
+os_color(int color)
+{
+    if (color)
+        printf("\x1b[%d;1m", 90 + color);
+    else
+        fputs("\x1b[0m", stdout);
+}
+
+static void
+os_reset_terminal(void)
+{
+    puts("\x1b[2J\x1b[H");
+}
+
+static void
+os_finish(void)
+{
+    // nothing
+}
+
+#elif _WIN32
+#include <windows.h>
+
+static void
+os_color(int color)
+{
+    WORD bits = color ? FOREGROUND_INTENSITY : 0;
+    if (!color || color & 0x1)
+        bits |= FOREGROUND_RED;
+    if (!color || color & 0x2)
+        bits |= FOREGROUND_GREEN;
+    if (!color || color & 0x4)
+        bits |= FOREGROUND_BLUE;
+    SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), bits);
+}
+
+static void
+os_reset_terminal(void)
+{
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    GetConsoleScreenBufferInfo(out, &info);
+    info.dwCursorPosition.Y = 0;
+    info.dwCursorPosition.X = 0;
+    SetConsoleCursorPosition(out, info.dwCursorPosition);
+}
+
+static void
+os_finish(void)
+{
+    system("pause");
+}
+#endif
 
 static uint64_t
 rotl(const uint64_t x, int k)
@@ -344,33 +402,60 @@ connect4_playout_many(struct connect4 *c, uint32_t count)
     return best;
 }
 
+static int player_color[2] = {1, 4};
+static int highlight_color = 3;
+static int indent = 19;
+
 static void
-connect4_display(uint64_t p0, uint64_t p1)
+connect4_display(uint64_t p0, uint64_t p1, uint64_t highlight)
 {
-    putchar('\n');
+    os_reset_terminal();
+    printf("%*s", indent, "");
     for (int w = 0; w < CONNECT4_WIDTH; w++)
-        printf("%d ", w + 1);
-    putchar('\n');
+        printf(" %d    ", w + 1);
+    puts("\n");
     for (int h = 0; h < CONNECT4_HEIGHT; h++) {
-        for (int w = 0; w < CONNECT4_WIDTH; w++) {
-            int s = h * CONNECT4_WIDTH + w;
-            if ((p0 >> s) & 1)
-                fputs("O ", stdout);
-            else if ((p1 >> s) & 1)
-                fputs("X ", stdout);
-            else
-                fputs(". ", stdout);
+        for (int b = 0; b < 2; b++) {
+            printf("%*s", indent, "");
+            for (int w = 0; w < CONNECT4_WIDTH; w++) {
+                int s = h * CONNECT4_WIDTH + w;
+                int mark = (highlight >> s) & 1;
+                int color = 0;
+                if ((p0 >> s) & 1)
+                    color = player_color[0];
+                else if ((p1 >> s) & 1)
+                    color = player_color[1];
+                if (color) {
+                    os_color(mark ? highlight_color : color);
+                    fputs("▐", stdout);
+                    if (mark)
+                        os_color(0);
+                    os_color(color);
+                    fputs("██", stdout);
+                    if (mark) {
+                        os_color(0);
+                        os_color(highlight_color);
+                    }
+                    fputs("▌", stdout);
+                    os_color(0);
+                    fputs("  ", stdout);
+                } else {
+                    fputs(" ..   ", stdout);
+                }
+            }
+            putchar('\n');
         }
         putchar('\n');
     }
 }
 
+static char buf[32UL * 1024 * 1024];
+
 int
 main(void)
 {
     /* Options */
-    uint32_t max_playouts = 100000;
-    size_t size = 16UL * 1024 * 1024;
+    uint32_t max_playouts = 512 * 1024;
     enum player_type {
         PLAYER_HUMAN,
         PLAYER_AI,
@@ -378,30 +463,61 @@ main(void)
         PLAYER_HUMAN, PLAYER_AI
     };
 
+    int done = 0;
+    do {
+        os_reset_terminal();
+        int item_color = 2;
+        os_color(item_color); putchar('1'); os_color(0);
+        puts(") Human vs. Computer (default)");
+        os_color(item_color); putchar('2'); os_color(0);
+        puts(") Computer vs. Human");
+        os_color(item_color); putchar('3'); os_color(0);
+        puts(") Computer vs. Computer");
+        fputs("> ", stdout);
+        fflush(stdout);
+        int c = getchar();
+        switch (c) {
+            case EOF:
+                exit(-1);
+            case '\n':
+            case '\r':
+                done = 1;
+                break;
+            case '1':
+                player_type[0] = PLAYER_HUMAN;
+                player_type[1] = PLAYER_AI;
+                break;
+            case '2':
+                player_type[0] = PLAYER_AI;
+                player_type[1] = PLAYER_HUMAN;
+                break;
+            case '3':
+                player_type[0] = PLAYER_AI;
+                player_type[1] = PLAYER_AI;
+                break;
+        }
+    } while (!done);
+
     /* Initialization */
     connect4_startup();
-    void *buf = malloc(size);
-    while (!buf) {
-        size *= 0.8;
-        buf = malloc(size);
-    }
-    connect4_init(buf, size);
-    struct connect4 *connect4 = buf;
-    printf("AI using %zuMB (%" PRIu32 " nodes)\n",
-           size / 1024 / 1024, connect4->nodes_available);
+    connect4_init(buf, sizeof(buf));
+    struct connect4 *connect4 = (void *)buf;
 
     /* Game Loop */
+    uint64_t last = 0;
     for (;;) {
-        connect4_display(connect4->state[0], connect4->state[1]);
+        connect4_display(connect4->state[0], connect4->state[1], last);
         uint64_t taken = connect4->state[0] | connect4->state[1];
-        int play;
+        int play = -1;
         switch (player_type[connect4->turn]) {
             case PLAYER_HUMAN:
                 for (;;) {
-                    fputs("\n> ", stdout);
+                    fputs("> ", stdout);
                     fflush(stdout);
-                    if (scanf(" %d", &play) != 1)
+                    char line[64];
+                    if (!fgets(line, sizeof(line), stdin))
                         exit(-1);
+                    play = strtol(line, 0, 10);
                     play--;
                     if (connect4_valid(taken, play))
                         break;
@@ -409,12 +525,13 @@ main(void)
                 }
                 break;
             case PLAYER_AI:
-                play = connect4_playout_many(buf, max_playouts);
+                play = connect4_playout_many(connect4, max_playouts);
                 break;
         }
         int position = connect4_drop(taken, play);
+        last = UINT64_C(1) << position;
         int turn = connect4->turn;
-        connect4_advance(buf, play);
+        connect4_advance(connect4, play);
         uint64_t who = connect4->state[turn];
         uint64_t opponent = connect4->state[!turn];
         uint64_t how;
@@ -422,17 +539,22 @@ main(void)
             case CONNECT4_RESULT_UNRESOLVED:
                 break;
             case CONNECT4_RESULT_DRAW:
-                connect4_display(connect4->state[0], connect4->state[1]);
-                printf("draw\n");
-                exit(0);
+                connect4_display(connect4->state[0], connect4->state[1], how);
+                puts("Draw.");
+                goto done;
             case CONNECT4_RESULT_WIN:
-                connect4_display(connect4->state[0], connect4->state[1]);
-                printf("player %c wins\n", "OX"[turn]);
-                exit(0);
+                connect4_display(connect4->state[0], connect4->state[1], how);
+                fputs("Player ", stdout);
+                os_color(player_color[turn]);
+                fputs("█", stdout);
+                os_color(0);
+                puts(" wins!");
+                goto done;
         }
     }
 
+done:
     /* Cleanup */
-    free(buf);
+    os_finish();
     return 0;
 }
