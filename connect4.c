@@ -11,7 +11,8 @@
 #define CONNECT4_SCORE_WIN  1.0f
 #define CONNECT4_SCORE_DRAW 0.1f
 
-#ifdef __unix__
+#if defined(__unix__) || defined(__unix) || \
+    (defined(__APPLE__) && defined(__MACH__))
 #include <unistd.h>
 #include <sys/time.h>
 
