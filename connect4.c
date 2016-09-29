@@ -8,6 +8,10 @@
 #define CONNECT4_WIDTH  7
 #define CONNECT4_HEIGHT 6
 
+#define CONNECT4_C            2.0f
+#define CONNECT4_MEMORY_SIZE  (32UL * 1024 * 1024)
+#define CONNECT4_MAX_PLAYOUTS (512UL * 1024)
+
 #define CONNECT4_SCORE_WIN  1.0f
 #define CONNECT4_SCORE_DRAW 0.1f
 
@@ -340,7 +344,7 @@ connect4_playout(struct connect4 *c,
             if (connect4_valid(taken, i))
                 total += n->playouts[i];
         float best_value = -INFINITY;
-        float numerator = 2.0f * logf(total);
+        float numerator = CONNECT4_C * logf(total);
         int best[CONNECT4_WIDTH];
         int nbest = 0;
         for (int i = 0; i < CONNECT4_WIDTH; i++) {
@@ -503,13 +507,13 @@ connect4_display(uint64_t p0, uint64_t p1, uint64_t highlight)
     }
 }
 
-static char buf[32UL * 1024 * 1024];
+static char buf[CONNECT4_MEMORY_SIZE];
 
 int
 main(void)
 {
     /* Options */
-    uint32_t max_playouts = 512 * 1024;
+    uint32_t max_playouts = CONNECT4_MAX_PLAYOUTS;
     enum player_type {
         PLAYER_HUMAN,
         PLAYER_AI,
