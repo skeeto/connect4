@@ -457,7 +457,7 @@ connect4_playout_many(struct connect4 *c, uint32_t count)
 
 static int player_color[2] = {1, 4};
 static int highlight_color = 3;
-static int indent = 19;
+static int indent = (80 - CONNECT4_WIDTH * 6) / 2;
 
 static void
 connect4_display(uint64_t p0, uint64_t p1, uint64_t highlight)
@@ -465,7 +465,7 @@ connect4_display(uint64_t p0, uint64_t p1, uint64_t highlight)
     os_reset_terminal();
     printf("%*s", indent, "");
     for (int w = 0; w < CONNECT4_WIDTH; w++)
-        printf(" %d    ", w + 1);
+        printf(" %-5d", w + 1);
     puts("\n");
     for (int h = 0; h < CONNECT4_HEIGHT; h++) {
         for (int b = 0; b < 2; b++) {
