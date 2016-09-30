@@ -23,7 +23,7 @@
 // Display colors and size
 #define COLOR_PLAYER0   1
 #define COLOR_PLAYER1   4
-#define COLOR_HIGHLIGHT 3
+#define COLOR_MARKER    3
 #define DISPLAY_INDENT  ((80 - CONNECT4_WIDTH * 6) / 2)
 
 /* OS Terminal/Console API */
@@ -107,7 +107,7 @@ os_reset_terminal(void)
     info.dwCursorPosition.X = 0;
     COORD origin = {0, 0};
     DWORD dummy;
-    FillConsoleOutputCharacter(out, ' ', -1, origin, &dummy);
+    FillConsoleOutputCharacter(out, ' ', (DWORD)-1, origin, &dummy);
     SetConsoleCursorPosition(out, info.dwCursorPosition);
 }
 
@@ -351,7 +351,7 @@ connect4_playout(struct connect4 *c,
             if (connect4_valid(taken, i))
                 total += n->playouts[i];
         float best_value = -INFINITY;
-        float numerator = CONNECT4_C * logf(total);
+        float numerator = CONNECT4_C * logf((float)total);
         int best[CONNECT4_WIDTH];
         int nbest = 0;
         for (int i = 0; i < CONNECT4_WIDTH; i++) {
@@ -489,7 +489,7 @@ connect4_display(uint64_t p0, uint64_t p1, uint64_t highlight)
                 else if ((p1 >> s) & 1)
                     color = COLOR_PLAYER1;
                 if (color) {
-                    os_color(mark ? COLOR_HIGHLIGHT : color);
+                    os_color(mark ? COLOR_MARKER : color);
                     os_special(RIGHT_HALF_BLOCK);
                     if (mark)
                         os_color(0);
@@ -498,7 +498,7 @@ connect4_display(uint64_t p0, uint64_t p1, uint64_t highlight)
                     os_special(FULL_BLOCK);
                     if (mark) {
                         os_color(0);
-                        os_color(COLOR_HIGHLIGHT);
+                        os_color(COLOR_MARKER);
                     }
                     os_special(LEFT_HALF_BLOCK);
                     os_color(0);
