@@ -562,11 +562,17 @@ typedef int (*connect4_player)(const struct connect4_game *, void *);
 static int
 connect4_game_run(struct connect4_game *g,
                   connect4_player players[2],
-                  void *args[2])
+                  void *args[2],
+                  int display)
 {
+    if (display)
+        connect4_display(g->state[0], g->state[1], g->marker);
     for (;;) {
         int play = players[g->turn](g, args[g->turn]);
-        switch (connect4_game_move(g, play)) {
+        enum connect4_result r = connect4_game_move(g, play);
+        if (display)
+            connect4_display(g->state[0], g->state[1], g->marker);
+        switch (r) {
             case CONNECT4_RESULT_UNRESOLVED:
                 break;
             case CONNECT4_RESULT_DRAW:
@@ -581,7 +587,6 @@ static int
 player_human(const struct connect4_game *g, void *arg)
 {
     (void)arg;
-    connect4_display(g->state[0], g->state[1], g->marker);
     uint64_t taken = g->state[0] | g->state[1];
     for (;;) {
         fputs("> ", stdout);
@@ -600,7 +605,6 @@ player_human(const struct connect4_game *g, void *arg)
 struct ai_config {
     struct connect4_ai *ai;
     uint32_t max_playouts;
-    int display;
 };
 
 static int
@@ -611,8 +615,6 @@ player_ai(const struct connect4_game *g, void *arg)
         connect4_advance(conf->ai, g->plays[g->nplays - 1]);
     int play = connect4_playout_many(conf->ai, conf->max_playouts);
     connect4_advance(conf->ai, play);
-    if (conf->display)
-        connect4_display(g->state[0], g->state[1], g->marker);
     return play;
 }
 
@@ -681,7 +683,6 @@ main(void)
                 ai_config[i] = (struct ai_config){
                     .ai = connect4_init(buf[i], sizeof(buf[i])),
                     .max_playouts = CONNECT4_MAX_PLAYOUTS,
-                    .display = 1,
                 };
                 args[i] = &ai_config[i];
                 break;
@@ -691,12 +692,10 @@ main(void)
     /* Game Loop */
     struct connect4_game game;
     connect4_game_init(&game);
-    connect4_game_run(&game, players, args);
+    connect4_game_run(&game, players, args, 1);
     if (game.winner == 2) {
-        connect4_display(game.state[0], game.state[1], game.marker);
         puts("Draw.");
     } else {
-        connect4_display(game.state[0], game.state[1], game.marker);
         fputs("Player ", stdout);
         os_color(game.winner ? COLOR_PLAYER1 : COLOR_PLAYER0);
         os_special(FULL_BLOCK);
