@@ -12,7 +12,7 @@
 #define CONNECT4_HEIGHT 6
 
 // AI constraints
-#define CONNECT4_MEMORY_SIZE  (32UL * 1024 * 1024)
+#define CONNECT4_MEMORY_SIZE  (64UL * 1024 * 1024)
 #define CONNECT4_MAX_PLAYOUTS (512UL * 1024)
 
 // AI parameters
@@ -156,6 +156,15 @@ splitmix64(uint64_t *x)
     return z ^ (z >> 31);
 }
 
+static uint64_t
+generate_seed(void)
+{
+    static uint64_t seed;
+    if (!seed)
+        seed ^= time(0);
+    return splitmix64(&seed);
+}
+
 /* Connect Four Engine */
 
 static uint64_t connect4_wins[CONNECT4_WIDTH * CONNECT4_HEIGHT][16];
@@ -248,6 +257,7 @@ struct connect4_ai {
     uint32_t nodes_allocated;
     uint32_t root;
     uint32_t free;
+    float c;
     int turn;
     struct connect4_node {
         uint32_t next[CONNECT4_WIDTH];
@@ -287,19 +297,18 @@ connect4_free(struct connect4_ai *c, uint32_t node)
 }
 
 static struct connect4_ai *
-connect4_init(void *buf, size_t bufsize)
+connect4_init(void *buf, size_t bufsize, float c_param)
 {
     struct connect4_ai *c = buf;
     c->nodes_available = (bufsize - sizeof(*c)) / sizeof(c->nodes[0]);
     c->nodes_allocated = 0;
     c->state[0] = 0;
     c->state[1] = 0;
+    c->c = c_param;
     c->turn = 0;
     c->free = 0;
-    static uint64_t seed;
-    seed ^= time(0);
-    c->rng[0] = splitmix64(&seed);
-    c->rng[1] = splitmix64(&seed);
+    c->rng[0] = generate_seed();
+    c->rng[1] = generate_seed();
     for (uint32_t i = 0; i < c->nodes_available - 1; i++)
         c->nodes[i].next[0] = i + 1;
     c->nodes[c->nodes_available - 1].next[0] = CONNECT4_NULL;
@@ -352,7 +361,7 @@ connect4_playout(struct connect4_ai *c,
             if (connect4_valid(taken, i))
                 total += n->playouts[i];
         float best_value = -INFINITY;
-        float numerator = CONNECT4_C * logf((float)total);
+        float numerator = c->c * logf((float)total);
         int best[CONNECT4_WIDTH];
         int nbest = 0;
         for (int i = 0; i < CONNECT4_WIDTH; i++) {
@@ -449,11 +458,14 @@ connect4_playout(struct connect4_ai *c,
 }
 
 static int
-connect4_playout_many(struct connect4_ai *c, uint32_t count)
+connect4_playout_many(struct connect4_ai *c, uint32_t *count)
 {
-    for (uint32_t i = 0; i < count; i++)
-        if (connect4_playout(c, c->root, c->state, c->turn) == -1)
+    uint32_t target = *count;
+    for (uint32_t i = 0; i < target; i++)
+        if (connect4_playout(c, c->root, c->state, c->turn) == -1) {
+            *count = i;
             break;
+        }
     struct connect4_node *n = c->nodes + c->root;
     double best_ratio = -INFINITY;
     int best_move = -1;
@@ -605,6 +617,7 @@ player_human(const struct connect4_game *g, void *arg)
 struct ai_config {
     struct connect4_ai *ai;
     uint32_t max_playouts;
+    uint64_t total_playouts;
 };
 
 static int
@@ -613,12 +626,199 @@ player_ai(const struct connect4_game *g, void *arg)
     struct ai_config *conf = arg;
     if (g->nplays)
         connect4_advance(conf->ai, g->plays[g->nplays - 1]);
-    int play = connect4_playout_many(conf->ai, conf->max_playouts);
+    uint32_t playouts = conf->max_playouts;
+    int play = connect4_playout_many(conf->ai, &playouts);
+    conf->total_playouts += playouts;
     connect4_advance(conf->ai, play);
     return play;
 }
 
 static char buf[2][CONNECT4_MEMORY_SIZE];  // AI search tree storage
+
+/* Genetic Algorithm */
+
+#define GA_MAX_CANDIDATES  32 // must be power of two
+#define GA_THRESHOLD       9
+#define GA_MAX_PLAYOUTS    UINT32_C(2097152)
+#define GA_MIN_PLAYOUTS    UINT32_C(16384)
+#define GA_MAX_DIV         8
+
+struct ga_candidate {
+    float c;
+    uint32_t playouts;
+    unsigned memory_div;
+    unsigned age;
+};
+
+static void
+ga_candidates_init(struct ga_candidate *candidates)
+{
+    uint64_t rng[2];
+    rng[0] = generate_seed();
+    rng[1] = generate_seed();
+    for (int i = 0; i < GA_MAX_CANDIDATES; i++) {
+        uint64_t bits = xoroshiro128plus(rng);
+        candidates[i].c = 4.0f * (bits & 0xffffffff) / (float)UINT32_MAX;
+        int shift = (bits >> 32) & 0x7;
+        candidates[i].playouts = GA_MIN_PLAYOUTS << shift;
+        shift = (bits >> 35) & 0x3;
+        candidates[i].memory_div = 1u << shift;
+        candidates[i].age = 0;
+    }
+}
+
+static void
+ga_candidates_breed(struct ga_candidate *candidates)
+{
+    uint64_t rng[2];
+    rng[0] = generate_seed();
+    rng[1] = generate_seed();
+    for (int i = 1; i < GA_MAX_CANDIDATES; i++) {
+        uint64_t bits = xoroshiro128plus(rng);
+        float rand = (bits & 0xffffffff) / (float)UINT32_MAX;
+        float delta = (2.0f * rand) - 1.0f;
+        candidates[i].c = candidates[0].c * (1.0f - delta / 10.0f);
+        if (candidates[i].c < 0.0f)
+            candidates[i].c = 0.0f;
+        int playouts = (bits >> 32) & 0x7;
+        switch (playouts) {
+            case 0:
+                if (candidates[i].playouts < GA_MAX_PLAYOUTS)
+                    candidates[i].playouts <<= 1;
+                break;
+            case 1:
+                if (candidates[i].playouts > GA_MIN_PLAYOUTS)
+                    candidates[i].playouts >>= 1;
+                break;
+            default:
+                break;
+        }
+        int div =  (bits >> 35) & 0x7;
+        switch (div) {
+            case 0:
+                if (candidates[i].memory_div < GA_MAX_DIV)
+                    candidates[i].memory_div++;
+                break;
+            case 1:
+                if (candidates[i].memory_div > 1)
+                    candidates[i].memory_div--;
+                break;
+            default:
+                break;
+        }
+        candidates[i].age = 0;
+    }
+}
+
+static int
+ga_tournament(struct ga_candidate *candidates)
+{
+    /* Shuffle candidates for tournament. */
+    uint64_t rng[2];
+    rng[0] = generate_seed();
+    rng[1] = generate_seed();
+    int tournament[GA_MAX_CANDIDATES];
+    for (int i = 0; i < GA_MAX_CANDIDATES; i++)
+        tournament[i] = i;
+    for (int i = GA_MAX_CANDIDATES - 1; i > 1; i--) {
+        int swap = xoroshiro128plus(rng) % (i + 1);
+        unsigned tmp = tournament[swap];
+        tournament[swap] = tournament[i];
+        tournament[i] = tmp;
+    }
+
+    for (int n = GA_MAX_CANDIDATES; n > 1; n /= 2) {
+        for (int i = 0; i < n / 2; i++) {
+            int balance = 0;
+            int a = tournament[i * 2 + 0];
+            int b = tournament[i * 2 + 1];
+            struct ai_config conf[2];
+            int round = 0;
+            while (labs(balance) <= GA_THRESHOLD) {
+                round++;
+                size_t a_size = sizeof(buf[0]) / candidates[a].memory_div;
+                conf[0] = (struct ai_config){
+                    .ai = connect4_init(buf[0], a_size, candidates[a].c),
+                    .max_playouts = candidates[a].playouts,
+                };
+                size_t b_size = sizeof(buf[1]) / candidates[b].memory_div;
+                conf[1] = (struct ai_config){
+                    .ai = connect4_init(buf[1], b_size, candidates[b].c),
+                    .max_playouts = candidates[b].playouts,
+                };
+
+                os_reset_terminal();
+                for (int j = 0; j < n; j++) {
+                    struct ga_candidate *c = candidates + tournament[j];
+                    if (j >= i && j < i * 2) {
+                        putchar('\n'); // eliminated
+                    } else {
+                        int color = 0;
+                        if (c->age)
+                            color = 2;
+                        else if (j == i * 2 || j == i * 2 + 1)
+                            color = COLOR_MARKER;
+                        if (color)
+                            os_color(color);
+                        size_t size = sizeof(buf[0]) / c->memory_div;
+                        printf("%u ticks, %.9g, %" PRIu32 " playouts, %zu MB\n",
+                               c->age, c->c, c->playouts, size / 1024 / 1024);
+                        if (color)
+                            os_color(0);
+                    }
+                }
+                printf("\nround %d, score %d\n", round, balance);
+
+                connect4_player players[2] = {player_ai, player_ai};
+                void *args[2] = {conf + 0, conf + 1};
+                struct connect4_game game;
+                connect4_game_init(&game);
+                connect4_game_run(&game, players, args, 0);
+                switch (game.winner) {
+                    case 0:
+                        balance += 3;
+                        break;
+                    case 1:
+                        balance -= 3;
+                        break;
+                    case 2: {
+                        // Draw: reward less resource use
+                        uint64_t a_total = conf[0].total_playouts;
+                        uint64_t b_total = conf[1].total_playouts;
+                        if (a_total < b_total)
+                            balance++;
+                        else if (b_total < a_total)
+                            balance--;
+                        else if (a_size < b_size)
+                            balance++;
+                        else if (b_size < a_size)
+                            balance--;
+                        else
+                            balance++; // prefer first
+                    } break;
+                }
+            }
+            if (balance > 0)
+                tournament[i] = a;
+            else
+                tournament[i] = b;
+        }
+    }
+    return tournament[0];
+}
+
+static void
+ga_run(void)
+{
+    struct ga_candidate candidates[GA_MAX_CANDIDATES];
+    ga_candidates_init(candidates);
+    for (;;) {
+        int winner = ga_tournament(candidates);
+        candidates[0] = candidates[winner];
+        candidates[0].age++;
+        ga_candidates_breed(candidates);
+    }
+}
 
 int
 main(void)
@@ -642,6 +842,8 @@ main(void)
         puts(") Computer vs. Human");
         os_color(item_color); putchar('3'); os_color(0);
         puts(") Computer vs. Computer");
+        os_color(item_color); putchar('4'); os_color(0);
+        puts(") Run Generic Algorithm");
         fputs("> ", stdout);
         fflush(stdout);
         int c = getchar();
@@ -664,6 +866,9 @@ main(void)
                 player_type[0] = PLAYER_AI;
                 player_type[1] = PLAYER_AI;
                 break;
+            case '4':
+                ga_run();
+                exit(0);
         }
     } while (!done);
 
@@ -681,7 +886,7 @@ main(void)
             case PLAYER_AI:
                 players[i] = player_ai;
                 ai_config[i] = (struct ai_config){
-                    .ai = connect4_init(buf[i], sizeof(buf[i])),
+                    .ai = connect4_init(buf[i], sizeof(buf[i]), CONNECT4_C),
                     .max_playouts = CONNECT4_MAX_PLAYOUTS,
                 };
                 args[i] = &ai_config[i];
