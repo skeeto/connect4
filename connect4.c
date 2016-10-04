@@ -21,9 +21,10 @@
 #define CONNECT4_SCORE_DRAW 0.1f
 
 // Display colors and size
-#define COLOR_PLAYER0   1
-#define COLOR_PLAYER1   4
-#define COLOR_MARKER    3
+#define COLOR_PLAYER0   9
+#define COLOR_PLAYER1   12
+#define COLOR_MARKER    11
+#define COLOR_BLANK     8
 #define DISPLAY_INDENT  ((80 - CONNECT4_WIDTH * 6) / 2)
 
 /* OS Terminal/Console API */
@@ -32,6 +33,7 @@ enum os_special {
     RIGHT_HALF_BLOCK = 0x2590,
     LEFT_HALF_BLOCK  = 0x258c,
     FULL_BLOCK       = 0x2588,
+    MIDDLE_DOT       = 0x00B7,
 };
 
 static void os_color(int);
@@ -46,8 +48,10 @@ static void os_finish(void);
 static void
 os_color(int color)
 {
+    int base = color & 0x8 ? 30 : 30;
+    const char *bold = color & 0x8 ? ";1" : "";
     if (color)
-        printf("\x1b[%d;1m", 90 + color);
+        printf("\x1b[%d%sm", base + (color & 0x7), bold);
     else
         fputs("\x1b[0m", stdout);
 }
@@ -71,6 +75,9 @@ os_special(enum os_special s)
         case FULL_BLOCK:
             fputs("█", stdout);
             break;
+        case MIDDLE_DOT:
+            fputs("·", stdout);
+            break;
     }
 }
 
@@ -87,13 +94,15 @@ os_finish(void)
 static void
 os_color(int color)
 {
-    WORD bits = color ? FOREGROUND_INTENSITY : 0;
+    WORD bits = 0;
     if (!color || color & 0x1)
         bits |= FOREGROUND_RED;
     if (!color || color & 0x2)
         bits |= FOREGROUND_GREEN;
     if (!color || color & 0x4)
         bits |= FOREGROUND_BLUE;
+    if (color & 0x8)
+        bits |= FOREGROUND_INTENSITY;
     SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), bits);
 }
 
@@ -505,7 +514,12 @@ connect4_display(uint64_t p0, uint64_t p1, uint64_t highlight)
                     os_color(0);
                     fputs("  ", stdout);
                 } else {
-                    fputs(" ..   ", stdout);
+                    os_color(COLOR_BLANK);
+                    fputs(" ", stdout);
+                    os_special(MIDDLE_DOT);
+                    os_special(MIDDLE_DOT);
+                    os_color(0);
+                    fputs("   ", stdout);
                 }
             }
             putchar('\n');
@@ -635,7 +649,7 @@ main(void)
     int done = 0;
     do {
         os_reset_terminal();
-        int item_color = 2;
+        int item_color = 10;
         os_color(item_color); putchar('1'); os_color(0);
         puts(") Human vs. Computer (default)");
         os_color(item_color); putchar('2'); os_color(0);
