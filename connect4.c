@@ -59,7 +59,7 @@ os_color(int color)
 static void
 os_reset_terminal(void)
 {
-    puts("\x1b[2J\x1b[H");
+    fputs("\x1b[2J\x1b[H", stdout);
 }
 
 static void
