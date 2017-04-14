@@ -36,6 +36,7 @@
 #define FULL_BLOCK       0x2588u
 #define MIDDLE_DOT       0x00B7u
 
+static void os_init(void);
 static void os_color(int);
 static void os_reset_terminal(void);
 static void os_finish(void);
