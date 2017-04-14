@@ -1,7 +1,9 @@
 #include <math.h>
 #include <time.h>
 #include <stdio.h>
+#include <wchar.h>
 #include <assert.h>
+#include <locale.h>
 #include <stdlib.h>
 #include <inttypes.h>
 
@@ -29,16 +31,13 @@
 
 /* OS Terminal/Console API */
 
-enum os_special {
-    RIGHT_HALF_BLOCK = 0x2590,
-    LEFT_HALF_BLOCK  = 0x258c,
-    FULL_BLOCK       = 0x2588,
-    MIDDLE_DOT       = 0x00B7,
-};
+#define RIGHT_HALF_BLOCK 0x2590u
+#define LEFT_HALF_BLOCK  0x258cu
+#define FULL_BLOCK       0x2588u
+#define MIDDLE_DOT       0x00B7u
 
 static void os_color(int);
 static void os_reset_terminal(void);
-static void os_special(enum os_special);
 static void os_finish(void);
 
 #if defined(__unix__) || defined(__unix) || defined(__APPLE__)
@@ -46,39 +45,26 @@ static void os_finish(void);
 #include <sys/time.h>
 
 static void
+os_init(void)
+{
+    // nothing
+}
+
+static void
 os_color(int color)
 {
     int base = color & 0x8 ? 30 : 30;
     const char *bold = color & 0x8 ? ";1" : "";
     if (color)
-        printf("\x1b[%d%sm", base + (color & 0x7), bold);
+        wprintf(L"\x1b[%d%sm", base + (color & 0x7), bold);
     else
-        fputs("\x1b[0m", stdout);
+        wprintf(L"\x1b[0m");
 }
 
 static void
 os_reset_terminal(void)
 {
-    fputs("\x1b[2J\x1b[H", stdout);
-}
-
-static void
-os_special(enum os_special s)
-{
-    switch (s) {
-        case RIGHT_HALF_BLOCK:
-            fputs("▐", stdout);
-            break;
-        case LEFT_HALF_BLOCK:
-            fputs("▌", stdout);
-            break;
-        case FULL_BLOCK:
-            fputs("█", stdout);
-            break;
-        case MIDDLE_DOT:
-            fputs("·", stdout);
-            break;
-    }
+    wprintf(L"\x1b[2J\x1b[H");
 }
 
 static void
@@ -88,8 +74,17 @@ os_finish(void)
 }
 
 #elif _WIN32
+#define _CRT_STDIO_ISO_WIDE_SPECIFIERS
+#include <io.h>
+#include <fcntl.h>
 #include <wchar.h>
 #include <windows.h>
+
+static void
+os_init(void)
+{
+    _setmode(_fileno(stdout), _O_U16TEXT);
+}
 
 static void
 os_color(int color)
@@ -118,15 +113,6 @@ os_reset_terminal(void)
     DWORD dummy;
     FillConsoleOutputCharacter(out, ' ', (DWORD)-1, origin, &dummy);
     SetConsoleCursorPosition(out, info.dwCursorPosition);
-}
-
-static void
-os_special(enum os_special s)
-{
-    WCHAR block = s;
-    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
-    DWORD dummy;
-    WriteConsoleW(h, &block, 1, &dummy, 0);
 }
 
 static void
@@ -483,13 +469,13 @@ static void
 connect4_display(uint64_t p0, uint64_t p1, uint64_t highlight)
 {
     os_reset_terminal();
-    printf("%*s", DISPLAY_INDENT, "");
+    wprintf(L"%*s", DISPLAY_INDENT, "");
     for (int w = 0; w < CONNECT4_WIDTH; w++)
-        printf(" %-5d", w + 1);
-    puts("\n");
+        wprintf(L" %-5d", w + 1);
+    wprintf(L"\n\n");
     for (int h = 0; h < CONNECT4_HEIGHT; h++) {
         for (int b = 0; b < 2; b++) {
-            printf("%*s", DISPLAY_INDENT, "");
+            wprintf(L"%*s", DISPLAY_INDENT, "");
             for (int w = 0; w < CONNECT4_WIDTH; w++) {
                 int s = h * CONNECT4_WIDTH + w;
                 int mark = (highlight >> s) & 1;
@@ -500,31 +486,31 @@ connect4_display(uint64_t p0, uint64_t p1, uint64_t highlight)
                     color = COLOR_PLAYER1;
                 if (color) {
                     os_color(mark ? COLOR_MARKER : color);
-                    os_special(RIGHT_HALF_BLOCK);
+                    fputwc(RIGHT_HALF_BLOCK, stdout);
                     if (mark)
                         os_color(0);
                     os_color(color);
-                    os_special(FULL_BLOCK);
-                    os_special(FULL_BLOCK);
+                    fputwc(FULL_BLOCK, stdout);
+                    fputwc(FULL_BLOCK, stdout);
                     if (mark) {
                         os_color(0);
                         os_color(COLOR_MARKER);
                     }
-                    os_special(LEFT_HALF_BLOCK);
+                    fputwc(LEFT_HALF_BLOCK, stdout);
                     os_color(0);
-                    fputs("  ", stdout);
+                    wprintf(L"  ");
                 } else {
                     os_color(COLOR_BLANK);
-                    fputs(" ", stdout);
-                    os_special(MIDDLE_DOT);
-                    os_special(MIDDLE_DOT);
+                    wprintf(L" ");
+                    fputwc(MIDDLE_DOT, stdout);
+                    fputwc(MIDDLE_DOT, stdout);
                     os_color(0);
-                    fputs("   ", stdout);
+                    wprintf(L"   ");
                 }
             }
-            putchar('\n');
+            fputwc(L'\n', stdout);
         }
-        putchar('\n');
+        fputwc(L'\n', stdout);
     }
 }
 
@@ -603,7 +589,7 @@ player_human(const struct connect4_game *g, void *arg)
     (void)arg;
     uint64_t taken = g->state[0] | g->state[1];
     for (;;) {
-        fputs("> ", stdout);
+        wprintf(L"> ");
         fflush(stdout);
         char line[64];
         if (!fgets(line, sizeof(line), stdin))
@@ -612,7 +598,7 @@ player_human(const struct connect4_game *g, void *arg)
         play--;
         if (connect4_valid(taken, play))
             return play;
-        printf("invalid move\n");
+        wprintf(L"invalid move\n");
     }
 }
 
@@ -645,18 +631,21 @@ main(void)
         PLAYER_HUMAN, PLAYER_AI
     };
 
+    os_init();
+    setlocale(LC_ALL, "");
+
     /* Main Menu */
     int done = 0;
     do {
         os_reset_terminal();
         int item_color = 10;
-        os_color(item_color); putchar('1'); os_color(0);
-        puts(") Human vs. Computer (default)");
-        os_color(item_color); putchar('2'); os_color(0);
-        puts(") Computer vs. Human");
-        os_color(item_color); putchar('3'); os_color(0);
-        puts(") Computer vs. Computer");
-        fputs("> ", stdout);
+        os_color(item_color); fputwc(L'1', stdout); os_color(0);
+        wprintf(L") Human vs. Computer (default)\n");
+        os_color(item_color); fputwc(L'2', stdout); os_color(0);
+        wprintf(L") Computer vs. Human\n");
+        os_color(item_color); fputwc(L'3', stdout); os_color(0);
+        wprintf(L") Computer vs. Computer\n");
+        wprintf(L"> ");
         fflush(stdout);
         int c = getchar();
         switch (c) {
@@ -708,13 +697,13 @@ main(void)
     connect4_game_init(&game);
     connect4_game_run(&game, players, args, 1);
     if (game.winner == 2) {
-        puts("Draw.");
+        wprintf(L"Draw.\n\n");
     } else {
-        fputs("Player ", stdout);
+        wprintf(L"Player ");
         os_color(game.winner ? COLOR_PLAYER1 : COLOR_PLAYER0);
-        os_special(FULL_BLOCK);
+        fputwc(FULL_BLOCK, stdout);
         os_color(0);
-        puts(" wins!");
+        wprintf(L" wins!\n\n");
     }
 
     /* Cleanup */
