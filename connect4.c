@@ -1,11 +1,17 @@
+/* Connect Four AI and Engine (DOS version)
+ * The AI is implemented using Monte Carlo Tree Search.
+ * Ref: https://nullprogram.com/blog/2017/04/27/
+ * This is free and unencumbered software released into the public domain.
+ */
 #include <math.h>
 #include <time.h>
 #include <stdio.h>
-#include <wchar.h>
 #include <assert.h>
-#include <locale.h>
 #include <stdlib.h>
 #include <inttypes.h>
+
+#include <unistd.h>
+#include <sys/time.h>
 
 /* Engine, AI, and Display Parameters */
 
@@ -14,7 +20,7 @@
 #define CONNECT4_HEIGHT 6
 
 // AI constraints
-#define CONNECT4_MEMORY_SIZE  (32UL * 1024 * 1024)
+#define CONNECT4_MEMORY_SIZE  (7UL * 1024 * 1024)
 #define CONNECT4_MAX_PLAYOUTS (512UL * 1024)
 
 // AI parameters
@@ -31,19 +37,15 @@
 
 /* OS Terminal/Console API */
 
-#define RIGHT_HALF_BLOCK 0x2590u
-#define LEFT_HALF_BLOCK  0x258cu
-#define FULL_BLOCK       0x2588u
-#define MIDDLE_DOT       0x00B7u
+#define RIGHT_HALF_BLOCK 0xde // 0x2590u
+#define LEFT_HALF_BLOCK  0xdd // 0x258cu
+#define FULL_BLOCK       0xdb // 0x2588u
+#define MIDDLE_DOT       0xfa // 0x00B7u
 
 static void os_init(void);
 static void os_color(int);
 static void os_reset_terminal(void);
 static void os_finish(void);
-
-#if defined(__unix__) || defined(__unix) || defined(__APPLE__)
-#include <unistd.h>
-#include <sys/time.h>
 
 static void
 os_init(void)
@@ -57,15 +59,15 @@ os_color(int color)
     int base = color & 0x8 ? 30 : 30;
     const char *bold = color & 0x8 ? ";1" : "";
     if (color)
-        wprintf(L"\x1b[%d%sm", base + (color & 0x7), bold);
+        printf("\x1b[%d%sm", base + (color & 0x7), bold);
     else
-        wprintf(L"\x1b[0m");
+        printf("\x1b[0m");
 }
 
 static void
 os_reset_terminal(void)
 {
-    wprintf(L"\x1b[2J\x1b[H");
+    printf("\x1b[2J\x1b[H");
 }
 
 static void
@@ -73,55 +75,6 @@ os_finish(void)
 {
     // nothing
 }
-
-#elif _WIN32
-#define _CRT_STDIO_ISO_WIDE_SPECIFIERS
-#include <io.h>
-#include <fcntl.h>
-#include <wchar.h>
-#include <windows.h>
-
-static void
-os_init(void)
-{
-    _setmode(_fileno(stdout), _O_U16TEXT);
-}
-
-static void
-os_color(int color)
-{
-    WORD bits = 0;
-    if (!color || color & 0x1)
-        bits |= FOREGROUND_RED;
-    if (!color || color & 0x2)
-        bits |= FOREGROUND_GREEN;
-    if (!color || color & 0x4)
-        bits |= FOREGROUND_BLUE;
-    if (color & 0x8)
-        bits |= FOREGROUND_INTENSITY;
-    SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), bits);
-}
-
-static void
-os_reset_terminal(void)
-{
-    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
-    CONSOLE_SCREEN_BUFFER_INFO info;
-    GetConsoleScreenBufferInfo(out, &info);
-    info.dwCursorPosition.Y = 0;
-    info.dwCursorPosition.X = 0;
-    COORD origin = {0, 0};
-    DWORD dummy;
-    FillConsoleOutputCharacter(out, ' ', (DWORD)-1, origin, &dummy);
-    SetConsoleCursorPosition(out, info.dwCursorPosition);
-}
-
-static void
-os_finish(void)
-{
-    system("pause");
-}
-#endif
 
 /* Pseudo-Random Number Generator */
 
@@ -470,13 +423,13 @@ static void
 connect4_display(uint64_t p0, uint64_t p1, uint64_t highlight)
 {
     os_reset_terminal();
-    wprintf(L"%*s", DISPLAY_INDENT, "");
+    printf("%*s", DISPLAY_INDENT, "");
     for (int w = 0; w < CONNECT4_WIDTH; w++)
-        wprintf(L" %-5d", w + 1);
-    wprintf(L"\n\n");
+        printf(" %-5d", w + 1);
+    printf("\n\n");
     for (int h = 0; h < CONNECT4_HEIGHT; h++) {
         for (int b = 0; b < 2; b++) {
-            wprintf(L"%*s", DISPLAY_INDENT, "");
+            printf("%*s", DISPLAY_INDENT, "");
             for (int w = 0; w < CONNECT4_WIDTH; w++) {
                 int s = h * CONNECT4_WIDTH + w;
                 int mark = (highlight >> s) & 1;
@@ -487,31 +440,31 @@ connect4_display(uint64_t p0, uint64_t p1, uint64_t highlight)
                     color = COLOR_PLAYER1;
                 if (color) {
                     os_color(mark ? COLOR_MARKER : color);
-                    fputwc(RIGHT_HALF_BLOCK, stdout);
+                    fputc(RIGHT_HALF_BLOCK, stdout);
                     if (mark)
                         os_color(0);
                     os_color(color);
-                    fputwc(FULL_BLOCK, stdout);
-                    fputwc(FULL_BLOCK, stdout);
+                    fputc(FULL_BLOCK, stdout);
+                    fputc(FULL_BLOCK, stdout);
                     if (mark) {
                         os_color(0);
                         os_color(COLOR_MARKER);
                     }
-                    fputwc(LEFT_HALF_BLOCK, stdout);
+                    fputc(LEFT_HALF_BLOCK, stdout);
                     os_color(0);
-                    wprintf(L"  ");
+                    printf("  ");
                 } else {
                     os_color(COLOR_BLANK);
-                    wprintf(L" ");
-                    fputwc(MIDDLE_DOT, stdout);
-                    fputwc(MIDDLE_DOT, stdout);
+                    printf(" ");
+                    fputc(MIDDLE_DOT, stdout);
+                    fputc(MIDDLE_DOT, stdout);
                     os_color(0);
-                    wprintf(L"   ");
+                    printf("   ");
                 }
             }
-            fputwc(L'\n', stdout);
+            fputc(L'\n', stdout);
         }
-        fputwc(L'\n', stdout);
+        fputc(L'\n', stdout);
     }
 }
 
@@ -590,7 +543,7 @@ player_human(const struct connect4_game *g, void *arg)
     (void)arg;
     uint64_t taken = g->state[0] | g->state[1];
     for (;;) {
-        wprintf(L"> ");
+        printf("> ");
         fflush(stdout);
         char line[64];
         if (!fgets(line, sizeof(line), stdin))
@@ -599,7 +552,7 @@ player_human(const struct connect4_game *g, void *arg)
         play--;
         if (connect4_valid(taken, play))
             return play;
-        wprintf(L"invalid move\n");
+        printf("invalid move\n");
     }
 }
 
@@ -633,20 +586,19 @@ main(void)
     };
 
     os_init();
-    setlocale(LC_ALL, "");
 
     /* Main Menu */
     int done = 0;
     do {
         os_reset_terminal();
         int item_color = 10;
-        os_color(item_color); fputwc(L'1', stdout); os_color(0);
-        wprintf(L") Human vs. Computer (default)\n");
-        os_color(item_color); fputwc(L'2', stdout); os_color(0);
-        wprintf(L") Computer vs. Human\n");
-        os_color(item_color); fputwc(L'3', stdout); os_color(0);
-        wprintf(L") Computer vs. Computer\n");
-        wprintf(L"> ");
+        os_color(item_color); fputc(L'1', stdout); os_color(0);
+        printf(") Human vs. Computer (default)\n");
+        os_color(item_color); fputc(L'2', stdout); os_color(0);
+        printf(") Computer vs. Human\n");
+        os_color(item_color); fputc(L'3', stdout); os_color(0);
+        printf(") Computer vs. Computer\n");
+        printf("> ");
         fflush(stdout);
         int c = getchar();
         switch (c) {
@@ -698,13 +650,13 @@ main(void)
     connect4_game_init(&game);
     connect4_game_run(&game, players, args, 1);
     if (game.winner == 2) {
-        wprintf(L"Draw.\n\n");
+        printf("Draw.\n\n");
     } else {
-        wprintf(L"Player ");
+        printf("Player ");
         os_color(game.winner ? COLOR_PLAYER1 : COLOR_PLAYER0);
-        fputwc(FULL_BLOCK, stdout);
+        fputc(FULL_BLOCK, stdout);
         os_color(0);
-        wprintf(L" wins!\n\n");
+        printf(" wins!\n\n");
     }
 
     /* Cleanup */
