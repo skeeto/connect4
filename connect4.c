@@ -54,7 +54,7 @@ os_init(void)
 static void
 os_color(int color)
 {
-    int base = color & 0x8 ? 30 : 30;
+    int base = color & 0x8 ? 90 : 30;
     const char *bold = color & 0x8 ? ";1" : "";
     if (color)
         wprintf(L"\x1b[%d%sm", base + (color & 0x7), bold);
