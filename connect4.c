@@ -377,7 +377,7 @@ connect4_playout(struct connect4_ai *c,
         if (winner == turn)
             n->score[play] += CONNECT4_SCORE_WIN;
         else if (winner == 2)
-            n->score[play] += CONNECT4_SCORE_WIN;
+            n->score[play] += CONNECT4_SCORE_DRAW;
         return winner;
     } else {
         /* Select a random, unplayed move. */
